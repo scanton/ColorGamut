@@ -1,0 +1,164 @@
+You are Codex running on a Mac inside VSCode in a GitHub project called ColorGamut on a developer machine with:
+- Homebrew installed
+- Node.js 20+ and pnpm installed
+- Python 3.10+ available (prefer 3.11)
+Goal: Build a local Next.js app (pnpm) that analyzes how “out of gamut” an RGB image will be when converted to various printer output ICC profiles (CMYK and CMYK + extended inks like OGV, OG, OV, GV, etc.), and ranks images/profiles by perceptual difference.
+
+IMPORTANT CONTEXT / DEFINITION
+We define “out of gamut / print difference” as the perceptual delta between:
+1) the original RGB image interpreted through an input RGB ICC profile (default sRGB), and
+2) the soft-proofed print simulation using a chosen printer ICC output profile and rendering intent.
+Compute this as a pixel-wise ΔE in Lab (prefer ΔE2000), plus summary statistics (mean, p95, max, %>2, %>5).
+Also compute a TAC (total ink coverage) metric when feasible (sum of channels) with a user-configurable limit per profile.
+
+HIGH-LEVEL APPROACH
+- Next.js provides UI + file upload + results visualization.
+- Heavy color management and ΔE math should be done server-side for correctness.
+- Use a Python analysis module invoked from Next.js API routes (child_process), because Python ecosystem handles ICC/Lab/ΔE well.
+- Prefer an ICC engine that can handle multi-channel (extended ink) output profiles. Use pyvips (libvips + lcms) if possible.
+
+INSTALLATION NOTES (must be documented in README, with Mac/Linux/Windows hints)
+- App should run locally: `pnpm dev`.
+- Python deps installed via `python -m venv .venv && source .venv/bin/activate && pip install -r python/requirements.txt`
+- System deps: libvips recommended.
+  - macOS: `brew install vips`
+  - Linux: `apt-get install libvips` (or distro equivalent)
+  - Windows: document a simple approach (e.g. vips prebuilt) but don’t block core build; allow app to run with a “missing vips” error message.
+
+REPO / TECH STACK
+- Next.js 14+ with App Router, TypeScript.
+- pnpm
+- Tailwind for basic styling (optional but recommended).
+- No database required; store uploaded files in a temp folder for processing and delete after.
+- All analysis results returned as JSON; generated preview images returned as base64 PNG strings for UI display.
+
+CORE FEATURES (MUST HAVE)
+1) Single Image Analysis
+   - UI to upload one RGB image (PNG/JPEG/TIFF).
+   - UI to choose:
+     - Input RGB profile: sRGB default; also allow user to upload/select ICC input profile.
+     - Output printer ICC profile: selectable from a local folder `profiles/` plus user-uploaded ICCs.
+     - Rendering intent: Relative Colorimetric, Perceptual, Saturation, Absolute.
+     - Black Point Compensation: on/off.
+     - Analysis resolution: “Full”, “1024px long edge”, “512px long edge” (default 1024 for speed).
+     - ΔE thresholds: defaults 2 and 5 (editable).
+     - Optional TAC limit: default blank; if set, compute % pixels over limit.
+   - Run analysis and display:
+     - Summary stats: mean ΔE2000, p95 ΔE2000, max ΔE2000, % pixels ΔE>2, % pixels ΔE>5
+     - Optional TAC stats if enabled: % pixels TAC > limit, p95 TAC, max TAC
+     - A grayscale ΔE heatmap preview (higher ΔE = brighter)
+     - A threshold mask preview (ΔE > threshold) as black/white
+
+2) Multi-Profile Comparison (same image, many profiles)
+   - UI to select multiple output profiles (CMYK and extended ink profiles).
+   - Compute stats for each profile and show a sortable table.
+   - Provide a single “rank score” per profile (default: 0.7*p95 + 0.3*mean) and allow changing weights.
+
+3) Batch Ranking (many images, one chosen profile)
+   - UI to upload multiple images.
+   - Choose one output profile + settings.
+   - Compute a ranked list of images by the same rank score and show top offenders.
+
+4) Profiles Management
+   - Read ICC profiles from `profiles/` at runtime.
+   - UI to upload ICC profile files to a user-local folder like `profiles/user/` (create if missing).
+   - Display profile metadata if available (description / device class / color space channels).
+   - IMPORTANT: treat “CMYK+OGV” etc. as just different ICC output profiles; do not hardcode channel assumptions.
+
+SERVER/API DESIGN (MUST HAVE)
+- API route: `POST /api/analyze`
+  - Accept multipart/form-data: image file, settings JSON, selected profiles (names) or uploaded ICCs.
+  - Save to temp; call Python script; return JSON results + base64 preview images.
+- API route: `GET /api/profiles`
+  - Returns list of available profiles and metadata.
+- Robust error handling:
+  - If Python/pyvips missing, return a clear message with setup steps.
+  - If profile invalid, return validation error.
+
+PYTHON ANALYSIS MODULE (MUST HAVE)
+Location: `python/analyze.py` plus helpers.
+
+Inputs:
+- image_path
+- input_profile_path (optional; default sRGB)
+- output_profile_path
+- rendering_intent (enum)
+- black_point_compensation (bool)
+- max_size (int long edge)
+- deltaE_thresholds (2 floats)
+- tac_limit (optional float)
+
+Processing steps (implement properly, not pseudo):
+A) Load image.
+B) Apply input ICC profile → PCS/Lab for “original appearance”.
+C) Soft-proof: convert image through output profile (RGB→output device space) then convert to Lab via output profile → PCS/Lab for “simulated print appearance”.
+   - Use the same intent/BPC flags both directions as appropriate for proofing.
+D) Compute ΔE2000 per pixel between original Lab and simulated Lab.
+E) Compute summary stats: mean, p95, max, %>thr1, %>thr2.
+F) Generate:
+   - ΔE heatmap PNG (8-bit, scaled, include legend or annotate in UI)
+   - Mask PNG for ΔE > thr2 (or user-selected)
+G) TAC:
+   - If you can access the device-space channels after RGB→output transform, compute TAC = sum(channels) (normalized to 0–100 or 0–1; be consistent and document).
+   - For multi-channel profiles, TAC is still sum of channels; allow user to set limit.
+   - If device-space extraction is not feasible for a given profile in the chosen library, return “tac_supported=false” instead of failing.
+
+Library preferences:
+- Prefer `pyvips` for ICC transforms and multi-channel support.
+- Use `numpy` for stats.
+- Use a reliable ΔE2000 implementation:
+  - Prefer `colour-science` (`colour.delta_E`) or implement ΔE2000 carefully if you avoid the dependency.
+- Keep performance reasonable: operate at chosen downsample size; use vectorized operations.
+
+Outputs:
+Return a JSON object like:
+{
+  "profile": { "name": "...", "path": "...", "channels": N, "description": "..." },
+  "settings": {...},
+  "stats": {
+     "mean_de": ..., "p95_de": ..., "max_de": ...,
+     "pct_de_gt_t1": ..., "pct_de_gt_t2": ...,
+     "rank_score": ...
+  },
+  "tac": { "supported": true/false, "limit": ..., "pct_gt_limit": ..., "p95": ..., "max": ... },
+  "previews": { "de_heatmap_png_base64": "...", "mask_png_base64": "..." }
+}
+
+NEXT.JS UI REQUIREMENTS (MUST HAVE)
+Pages:
+- `/` simple landing with links
+- `/single` single image analysis
+- `/compare` one image, multiple profiles
+- `/batch` multiple images, one profile
+Components:
+- Profile picker (multi-select)
+- Settings panel (intent, BPC, max size, thresholds, weights)
+- Results table (sortable) + preview panel (heatmap/mask)
+- A small “explain score” tooltip describing mean/p95 and thresholds
+
+QUALITY BAR / ACCEPTANCE CRITERIA
+- App starts with `pnpm dev` and loads pages.
+- `/api/profiles` lists ICC profiles found in `profiles/` and `profiles/user/`.
+- Analysis produces consistent numbers and previews.
+- Rank sorting works.
+- If pyvips is missing, UI shows a clear actionable error with install commands.
+- Code is clean, typed, and documented.
+
+SAMPLE DATA / DEV EXPERIENCE (NICE TO HAVE)
+- Include a tiny sample image in `public/samples/` (safe generic photo) and allow “try sample”.
+- Include README section “How to add your printer profiles (CMYK, CMYK+OGV, etc.)” and explain that each extended ink option is simply a different ICC output profile to select.
+
+IMPLEMENTATION DETAILS / FILE STRUCTURE (REQUESTED)
+- Use App Router: `app/(routes)/single/page.tsx`, etc.
+- API routes in `app/api/*/route.ts`.
+- Python in `python/` with `requirements.txt`.
+- Node calls python via `spawn` using the venv python if present; otherwise `python3`.
+- Temp files in `.tmp/` created at runtime and cleaned up.
+
+NOW BUILD IT
+- Scaffold the Next.js project and implement all features above.
+- Don’t ask me questions; make reasonable defaults.
+- When something is uncertain (e.g., TAC extraction for certain profiles), implement best-effort and return capability flags.
+- Provide complete code for all files, plus README with setup steps.
+- include .gitignore file to prevent Git from tracking 3rd party libraries and external data
+

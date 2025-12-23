@@ -1,0 +1,4 @@
+numpy>=1.26.0
+Pillow>=10.3.0
+pyvips>=2.2.1
+colour-science>=0.4.4
