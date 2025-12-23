@@ -30,8 +30,6 @@ Open http://localhost:3000.
 
 If pyvips is missing, API responses will include a setup hint; install libvips + pip deps and retry.
 
-<img width="1636" height="1532" alt="image" src="https://github.com/user-attachments/assets/6dce29f8-867e-4485-9812-0bfb907f7cc4" />
-
 ## App structure
 - `app/` Next.js App Router pages: `/single`, `/compare`, `/batch`
 - `app/api/analyze` calls `python/analyze.py` via child_process
@@ -49,6 +47,9 @@ If pyvips is missing, API responses will include a setup hint; install libvips +
    - `/single` one image, one output profile + heatmap/mask previews.
    - `/compare` one image vs multiple profiles with sortable table and preview for the top rank.
    - `/batch` many images vs one profile, ranked by 0.7×p95 + 0.3×mean (editable weights).
+
+## Screenshot
+<img width="1636" height="1532" alt="image" src="https://github.com/user-attachments/assets/6dce29f8-867e-4485-9812-0bfb907f7cc4" />
 
 ## Interpreting results
 - **Mean ΔE2000**: Average perceptual shift. Rough guide: ≤1 great, 1–3 low, 3–5 watch, >5 noticeable.
