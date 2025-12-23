@@ -30,6 +30,8 @@ Open http://localhost:3000.
 
 If pyvips is missing, API responses will include a setup hint; install libvips + pip deps and retry.
 
+<img width="1636" height="1532" alt="image" src="https://github.com/user-attachments/assets/6dce29f8-867e-4485-9812-0bfb907f7cc4" />
+
 ## App structure
 - `app/` Next.js App Router pages: `/single`, `/compare`, `/batch`
 - `app/api/analyze` calls `python/analyze.py` via child_process
